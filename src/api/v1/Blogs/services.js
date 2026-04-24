@@ -120,11 +120,11 @@ exports.getBlogsServices = async ({ q, page, cat }) => {
         },
       },
     ]);
-
-    for (const blog of blogs) {
-      const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
-      blog.image = url;
-    }
+    console.log(blogs);
+    // for (const blog of blogs) {
+    //   const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
+    //   blog.image = url;
+    // }
 
     if (blogs.length === 0) {
       response.code = 404;
@@ -292,10 +292,10 @@ exports.singleBlogServices = async ({ q }) => {
       return response;
     }
 
-    for (const blog of blogs) {
-      const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
-      blog.image = url;
-    }
+    // for (const blog of blogs) {
+    //   const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
+    //   blog.image = url;
+    // }
 
     response.data = { blogs };
 
@@ -327,10 +327,10 @@ exports.singleBlogByIdServices = async ({ id }) => {
       return response;
     }
 
-    for (const blog of blogs) {
-      const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
-      blog.image = url;
-    }
+    // for (const blog of blogs) {
+    //   const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
+    //   blog.image = url;
+    // }
 
     // console.log(blogs);
     response.data = { blogs };

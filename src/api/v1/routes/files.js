@@ -25,8 +25,6 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 router.post("/files", upload.single("images"), async (req, res) => {
-
-
   const fileExtention = path.extname(req.file.originalname);
   const fileName =
     req.file.originalname

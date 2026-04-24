@@ -1,7 +1,8 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
 
-const DB_URL = "mongodb+srv://parag0045_db_user:DHitZqC50v1XPGpl@cluster0.tvtilag.mongodb.net/skipthegames?appName=Cluster0";
+const DB_URL =
+  "mongodb+srv://parag0045_db_user:DHitZqC50v1XPGpl@cluster0.tvtilag.mongodb.net/skipthegames?appName=Cluster0";
 
 async function seed() {
   try {
@@ -22,8 +23,8 @@ async function seed() {
           isDelete: { type: Boolean, default: false },
           credit: { type: Number, default: 0 },
         },
-        { timestamps: true }
-      )
+        { timestamps: true },
+      ),
     );
 
     const email = "superadmin@parag.com";

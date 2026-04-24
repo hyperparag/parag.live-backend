@@ -28,10 +28,10 @@ router.post("/", async (req, res) => {
           metadata: { user_id: user_id },
           checkout: {
             speedPolicy: "MediumSpeed",
-            redirectURL: `https://skipthegames.bio/payment-success`,
+            redirectURL: `https://parag.live/payment-success`,
           },
         }),
-      }
+      },
     );
 
     if (!response.ok) {
