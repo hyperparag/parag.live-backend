@@ -1,6 +1,5 @@
 const {
   addProductService,
-  getProductsService,
   getAdminUserPosts,
   searchProductService,
   getProductService,
@@ -10,8 +9,7 @@ const {
   getOnlyUserPosts,
   getUnApprovedService,
   getApprovedService,
-  updateMany,
-  updateApprove,
+  updateApproveMany,
   getAllPosts,
   getPostForSitemap,
   getPostForSitemapSecond,
@@ -54,14 +52,7 @@ exports.updateApprove = async (req, res) => {
 
 // update Products
 exports.updateManyById = async (req, res) => {
-  const { status, code, message, data } = await updateApprove({
-    ...req.params,
-    ...req.body,
-  });
-  if (data.product) {
-    return res.status(code).json({ code, status, message, data });
-  }
-  res.status(code).json({ code, status, message });
+  return updateApproveMany(req, res);
 };
 
 // delete Products

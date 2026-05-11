@@ -1,29 +1,37 @@
-const cron = require("node-cron");
-const { Product } = require("../models");
+const { Product, Ads, Blogs } = require("../models");
 
 const router = require("express").Router();
 
 router.get("/", async (req, res) => {
-  const updateDataStatus = async () => {
-    const validate = await Product.find({
-      $and: [
-        { isDelete: false },
-        { premiumDay: { $gt: 0 } },
-        { $project: { name: 1, premiumDay: 1, isPremium: 1 } },
-      ],
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+  try {
+    // Decrement premiumDay and expire isPremium for products
+    const premiumProducts = await Product.find({
+      isDelete: false,
+      premiumDay: { $gt: 0 },
     });
 
-    const minus = validate.map(async (a) => {
-      a.premiumDay = a.premiumDay - 24;
-      if (a.premiumDay == 0) {
-        a.isPremium = true;
-      }
-      await a.save();
-    });
+    await Promise.all(
+      premiumProducts.map(async (product) => {
+        product.premiumDay = product.premiumDay - 24;
+        if (product.premiumDay <= 0) {
+          product.premiumDay = 0;
+          product.isPremium = false;
+        }
+        await product.save();
+      }),
+    );
+
+    // Hard-delete ads and blog posts older than 1 year
+    await Ads.deleteMany({ createdAt: { $lte: oneYearAgo } });
+    await Blogs.deleteMany({ createdAt: { $lte: oneYearAgo } });
 
     res.send("success");
-  };
-  await updateDataStatus();
+  } catch (err) {
+    res.status(500).send("cron error: " + err.message);
+  }
 });
 
 module.exports = router;
