@@ -6,7 +6,7 @@ const router = express.Router();
 router.get("/", verifyAdmin, async (req, res) => {
   const allProducts = await Product.countDocuments({});
   const allPremiumProducts = await Product.find({
-    isPremium: false,
+    isPremium: true,
   }).countDocuments({});
 
   let today = new Date().toDateString();

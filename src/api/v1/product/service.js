@@ -292,7 +292,35 @@ exports.getApprovedService = async ({
         },
       },
       {
-        $sort: { createdAt: -1 },
+        $addFields: {
+          _sortScore: {
+            $cond: {
+              if: {
+                $or: [
+                  { $gt: ["$boostExpiresAt", new Date()] },
+                  {
+                    $and: [
+                      { $gt: ["$premiumDay", 0] },
+                      { $not: { $ifNull: ["$boostExpiresAt", false] } },
+                      { $gt: [{ $add: ["$createdAt", { $multiply: ["$premiumDay", 3600000] }] }, new Date()] }
+                    ]
+                  }
+                ]
+              },
+              then: 2,
+              else: {
+                $cond: {
+                  if: { $and: [{ $eq: ["$isPremium", true] }, { $not: { $gt: ["$premiumDay", 0] } }] },
+                  then: 1,
+                  else: 0
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        $sort: { _sortScore: -1, createdAt: -1 },
       },
       { $skip: skipCount },
       {
@@ -334,6 +362,8 @@ exports.getApprovedService = async ({
   }
 };
 
+const PREMIUM_COST = { 168: 7, 336: 10, 720: 15 };
+
 // add Products
 exports.addProductService = async ({ body }) => {
   const response = {
@@ -343,6 +373,29 @@ exports.addProductService = async ({ body }) => {
   };
 
   try {
+    const cost = PREMIUM_COST[body.premiumDay] ?? 0;
+
+    if (cost > 0) {
+      const user = await User.findById(body.posterId).exec();
+      if (!user || parseFloat(user.credit) < cost) {
+        response.code = 402;
+        response.status = "failed";
+        response.message = "Insufficient credits";
+        return response;
+      }
+      user.credit = parseFloat(user.credit) - cost;
+      await user.save();
+    }
+
+    if (body.cities && body.cities.length > 0) {
+      body.isPremium = true;
+    }
+
+    if (body.premiumDay > 0) {
+      body.isPremium = true;
+      body.boostExpiresAt = new Date(Date.now() + body.premiumDay * 60 * 60 * 1000);
+    }
+
     const newProduct = new Product(body);
     await newProduct.save();
     return response;
@@ -732,10 +785,42 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
     const totalDocs = await Product.find(filter).countDocuments({});
 
     const products = await Product.aggregate([
-      { $sort: { isPremium: 1, _id: -1 } },
+      { $match: filter },
       {
-        $match: filter,
+        $addFields: {
+          _isBoostActive: {
+            $or: [
+              { $gt: ["$boostExpiresAt", new Date()] },
+              {
+                $and: [
+                  { $gt: ["$premiumDay", 0] },
+                  { $not: { $ifNull: ["$boostExpiresAt", false] } },
+                  { $gt: [{ $add: ["$createdAt", { $multiply: ["$premiumDay", 3600000] }] }, new Date()] }
+                ]
+              }
+            ]
+          }
+        }
       },
+      {
+        $addFields: {
+          boosted: "$_isBoostActive",
+          _sortScore: {
+            $cond: {
+              if: "$_isBoostActive",
+              then: 2,
+              else: {
+                $cond: {
+                  if: { $and: [{ $eq: ["$isPremium", true] }, { $not: { $gt: ["$premiumDay", 0] } }] },
+                  then: 1,
+                  else: 0
+                }
+              }
+            }
+          }
+        }
+      },
+      { $sort: { _sortScore: -1, createdAt: -1 } },
       {
         $lookup: {
           from: "users",
@@ -754,6 +839,7 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
           isPremium: 1,
           age: 1,
           imgOne: 1,
+          boosted: 1,
         },
       },
     ]);
@@ -966,6 +1052,8 @@ exports.getOnlyUserPosts = async ({
           category: 1,
           subCategory: 1,
           createdAt: 1,
+          premiumDay: 1,
+          boostExpiresAt: 1,
         },
       },
     ]);

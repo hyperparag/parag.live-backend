@@ -20,7 +20,8 @@ const productSchema = Schema({
   imgFour: {type : String},
   posterId : {type: mongoose.Schema.Types.ObjectId, ref: "User"},
   isDelete : { type : Boolean , default: false },
-  isPremium : { type : Boolean }
+  isPremium : { type : Boolean },
+  boostExpiresAt : { type : Date }
 },
 { timestamps: true }
 );
