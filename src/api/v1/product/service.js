@@ -302,22 +302,37 @@ exports.getApprovedService = async ({
                     $and: [
                       { $gt: ["$premiumDay", 0] },
                       { $not: { $ifNull: ["$boostExpiresAt", false] } },
-                      { $gt: [{ $add: ["$createdAt", { $multiply: ["$premiumDay", 3600000] }] }, new Date()] }
-                    ]
-                  }
-                ]
+                      {
+                        $gt: [
+                          {
+                            $add: [
+                              "$createdAt",
+                              { $multiply: ["$premiumDay", 3600000] },
+                            ],
+                          },
+                          new Date(),
+                        ],
+                      },
+                    ],
+                  },
+                ],
               },
               then: 2,
               else: {
                 $cond: {
-                  if: { $and: [{ $eq: ["$isPremium", true] }, { $not: { $gt: ["$premiumDay", 0] } }] },
+                  if: {
+                    $and: [
+                      { $eq: ["$isPremium", true] },
+                      { $not: { $gt: ["$premiumDay", 0] } },
+                    ],
+                  },
                   then: 1,
-                  else: 0
-                }
-              }
-            }
-          }
-        }
+                  else: 0,
+                },
+              },
+            },
+          },
+        },
       },
       {
         $sort: { _sortScore: -1, createdAt: -1 },
@@ -389,7 +404,9 @@ exports.addProductService = async ({ body }) => {
 
     if (body.premiumDay > 0) {
       body.isPremium = true;
-      body.boostExpiresAt = new Date(Date.now() + body.premiumDay * 60 * 60 * 1000);
+      body.boostExpiresAt = new Date(
+        Date.now() + body.premiumDay * 60 * 60 * 1000,
+      );
     }
 
     const newProduct = new Product(body);
@@ -791,12 +808,22 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
                 $and: [
                   { $gt: ["$premiumDay", 0] },
                   { $not: { $ifNull: ["$boostExpiresAt", false] } },
-                  { $gt: [{ $add: ["$createdAt", { $multiply: ["$premiumDay", 3600000] }] }, new Date()] }
-                ]
-              }
-            ]
-          }
-        }
+                  {
+                    $gt: [
+                      {
+                        $add: [
+                          "$createdAt",
+                          { $multiply: ["$premiumDay", 3600000] },
+                        ],
+                      },
+                      new Date(),
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
       },
       {
         $addFields: {
@@ -807,14 +834,19 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
               then: 2,
               else: {
                 $cond: {
-                  if: { $and: [{ $eq: ["$isPremium", true] }, { $not: { $gt: ["$premiumDay", 0] } }] },
+                  if: {
+                    $and: [
+                      { $eq: ["$isPremium", true] },
+                      { $not: { $gt: ["$premiumDay", 0] } },
+                    ],
+                  },
                   then: 1,
-                  else: 0
-                }
-              }
-            }
-          }
-        }
+                  else: 0,
+                },
+              },
+            },
+          },
+        },
       },
       { $sort: { _sortScore: -1, createdAt: -1 } },
       {
