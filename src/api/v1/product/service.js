@@ -93,7 +93,7 @@ exports.getApprovedService = async ({
         $gte: threeDaysAgo.startOf("day").toDate(),
       };
     }
-    if (date == "last3days") {
+    if (date == "last7days") {
       newDate = {
         $gte: sevenDaysAgo.startOf("day").toDate(),
       };
@@ -150,7 +150,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && newDate && searchText) {
       forPage = {
-        category: regex,
+        subCategory: regex,
         createdAt: newDate,
         name: titleRegex,
       };
@@ -167,7 +167,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && searchText) {
       forPage = {
-        category: regex,
+        subCategory: regex,
         name: titleRegex,
       };
     } else if (subCat && searchText) {
@@ -190,7 +190,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && newDate) {
       forPage = {
-        category: regex,
+        subCategory: regex,
         createdAt: newDate,
       };
     } else if (newDate && subCat) {
@@ -201,7 +201,7 @@ exports.getApprovedService = async ({
     } else if (newDate) {
       forPage = { createdAt: newDate };
     } else if (cat) {
-      forPage = { category: regex };
+      forPage = { subCategory: regex };
     } else if (subCat) {
       forPage = { subCategory: subRegex };
     } else {
@@ -226,7 +226,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && newDate && searchText) {
       matchStage.$match = {
-        category: regex,
+        subCategory: regex,
         createdAt: newDate,
         name: titleRegex,
       };
@@ -243,7 +243,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && searchText) {
       matchStage.$match = {
-        category: regex,
+        subCategory: regex,
         name: titleRegex,
       };
     } else if (subCat && searchText) {
@@ -266,7 +266,7 @@ exports.getApprovedService = async ({
       };
     } else if (cat && newDate) {
       matchStage.$match = {
-        category: regex,
+        subCategory: regex,
         createdAt: newDate,
       };
     } else if (newDate && subCat) {
@@ -277,7 +277,7 @@ exports.getApprovedService = async ({
     } else if (newDate) {
       matchStage.$match = { createdAt: newDate };
     } else if (cat) {
-      matchStage.$match = { category: regex };
+      matchStage.$match = { subCategory: regex };
     } else if (subCat) {
       matchStage.$match = { subCategory: subRegex };
     } else {
@@ -385,10 +385,6 @@ exports.addProductService = async ({ body }) => {
       }
       user.credit = parseFloat(user.credit) - cost;
       await user.save();
-    }
-
-    if (body.cities && body.cities.length > 0) {
-      body.isPremium = true;
     }
 
     if (body.premiumDay > 0) {
@@ -1163,7 +1159,11 @@ exports.getProductService = async ({ id }) => {
 
     response.related = await Product.find({
       subCategory: products?.[0]?.subCategory,
+      _id: { $ne: products?.[0]?._id },
+      isApproved: true,
+      isDelete: false,
     })
+      .sort({ createdAt: -1 })
       .limit(8)
       .select("name imgOne");
 

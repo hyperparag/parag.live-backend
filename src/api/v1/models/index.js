@@ -11,6 +11,7 @@ const Transactions = require("../transaction/Model")
 const Rainbow = require("../rainbow/Model");
 const Responsive = require("../responsive/Model");
 const Deposit = require("../deposit/Model");
+const Verification = require("../verification/Model");
 
 module.exports = {
   Product,
@@ -25,4 +26,5 @@ module.exports = {
   Responsive,
   Rainbow,
   Deposit,
+  Verification,
 };
