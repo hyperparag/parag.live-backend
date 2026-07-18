@@ -29,7 +29,7 @@ exports.getLinksResponsive = async (req, res) => {
     links: {},
   };
   response.links = await Responsive.findOne({
-    _id: "66689fbab312cb5061e3f771",
+    _id: "6a4dff1365f818834bf4b27b",
   });
 
   res.send({ response });

@@ -29,7 +29,7 @@ exports.getLinksRainbow = async (req, res) => {
     links: {},
   };
   response.links = await Rainbow.findOne({
-    _id: "66689d94951fef8194c923ab",
+    _id: "6a4dfed965f818834bf4b278",
   });
 
   res.send({ response });
