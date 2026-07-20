@@ -828,24 +828,7 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
       {
         $addFields: {
           boosted: "$_isBoostActive",
-          _sortScore: {
-            $cond: {
-              if: "$_isBoostActive",
-              then: 2,
-              else: {
-                $cond: {
-                  if: {
-                    $and: [
-                      { $eq: ["$isPremium", true] },
-                      { $not: { $gt: ["$premiumDay", 0] } },
-                    ],
-                  },
-                  then: 1,
-                  else: 0,
-                },
-              },
-            },
-          },
+          _sortScore: { $cond: { if: "$_isBoostActive", then: 1, else: 0 } },
         },
       },
       { $sort: { _sortScore: -1, createdAt: -1 } },
