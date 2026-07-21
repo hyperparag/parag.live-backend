@@ -1152,11 +1152,11 @@ exports.getProductService = async ({ id }) => {
 
   try {
     response.rainbow = await Rainbow.findOne({
-      _id: "66689d94951fef8194c923ab",
+      _id: "6a4dfed965f818834bf4b278",
     });
 
     response.responsiveads = await Responsive.findOne({
-      _id: "66689fbab312cb5061e3f771",
+      _id: "6a4dff1365f818834bf4b27b",
     });
     response.links = await Links.find({}).select("-v");
 
