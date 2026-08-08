@@ -11,6 +11,7 @@ const csrfProtection = csrf({ cookie: true });
 const app = express();
 require("./src/api/v1/config").dbConnection();
 
+
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -23,7 +24,7 @@ app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
 const corsOptions = {
   origin: "*",
-  credentials: true, //access-control-allow-credentials:true
+  credentials: true,
   optionSuccessStatus: 200,
 };
 app.use(cors(corsOptions));
