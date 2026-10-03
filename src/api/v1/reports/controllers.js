@@ -16,10 +16,8 @@ exports.getReport = async(req , res)=>{
   const {status , code , message, data} = await getReportsServices({
     ...req.query,
   });
-  if (data.reports) {
-    return res.status(code).json({ code, status, message, data });
-  }
-  res.status(code).json({ code, status, message });
+  // data.reports is always present now, including when it is an empty array.
+  res.status(code).json({ code, status, message, data });
 }
 
 

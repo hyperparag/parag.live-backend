@@ -17,6 +17,7 @@ const {
   increaseUserCredit,
   saveUser,
 } = require("../users/services");
+const { convertReferralEarnings } = require("../utils/referral");
 const verifyToken = require("../middleware/checkLogin");
 const verifyAdmin = require("../middleware/adminCheck");
 
@@ -25,6 +26,19 @@ const router = express.Router();
 router.post("/", addUserService);
 router.post("/login", signinUsers);
 router.post("/save", saveUser);
+// Turn referral earnings into posting credit (amount optional = all of it).
+router.post("/referral/convert", verifyToken, async (req, res) => {
+  try {
+    const result = await convertReferralEarnings({
+      userId: req.decoded?._id,
+      amount: req.body?.amount,
+    });
+    res.status(result.code).json(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, code: 500, message: "Error. Try again" });
+  }
+});
 router.get("/", verifyToken, getUsersService);
 
 router.get("/:id", getUser);

@@ -1,5 +1,12 @@
 const { default: mongoose } = require("mongoose");
-const { Product, User, Links, Responsive, Rainbow } = require("../models");
+const {
+  Product,
+  User,
+  Links,
+  Responsive,
+  Rainbow,
+  Transactions,
+} = require("../models");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const {
   S3Client,
@@ -20,6 +27,34 @@ const {
 // });
 
 const moment = require("moment/moment");
+const { reviewAd, contentHash } = require("../utils/moderation");
+const { PREMIUM_COST, MULTI_CITY_RATE } = require("../config/pricing");
+
+/**
+ * Scheduled posts: an ad with a future publishAt stays hidden from every public
+ * query until that time passes. Enforced at read time, so scheduling precision
+ * does not depend on how often the cron runs.
+ */
+const publishedGate = () => ({
+  $or: [
+    { publishAt: null },
+    { publishAt: { $exists: false } },
+    { publishAt: { $lte: new Date() } },
+  ],
+});
+exports.publishedGate = publishedGate;
+
+/**
+ * Credits owed for an ad, derived from the stored ad rather than from the
+ * client. Used by both posting and reposting so the two can never disagree.
+ */
+const feeForAd = (ad = {}) => {
+  const boost = PREMIUM_COST[ad.premiumDay] ?? 0;
+  const cityCount = Array.isArray(ad.cities) ? ad.cities.length : 0;
+  const multiCity = cityCount > 1 ? cityCount * MULTI_CITY_RATE : 0;
+  return Math.round((boost + multiCity) * 100) / 100;
+};
+exports.feeForAd = feeForAd;
 
 // for today
 const startOfDay = moment().startOf("day");
@@ -289,6 +324,7 @@ exports.getApprovedService = async ({
       {
         $match: {
           isApproved: true,
+          ...publishedGate(),
         },
       },
       {
@@ -377,10 +413,67 @@ exports.getApprovedService = async ({
   }
 };
 
-const PREMIUM_COST = { 168: 7, 336: 10, 720: 15 };
+/**
+ * Fields a client is allowed to set on an ad. Everything else that ends up on
+ * the document (isApproved, isPremium, boostExpiresAt, contentHash, posterId)
+ * is decided here, server-side. Before this whitelist existed the request body
+ * went straight into new Product(body), so a caller could self-approve, grant
+ * itself a boost it had not paid for, or post as another user.
+ */
+const CLIENT_WRITABLE_FIELDS = [
+  "name",
+  "phone",
+  "email",
+  "category",
+  "subCategory",
+  "description",
+  "city",
+  "cities",
+  "link",
+  "age",
+  "imgOne",
+  "imgTwo",
+  "imgThree",
+  "imgFour",
+  "imageFileIds",
+  "altTexts",
+  "premiumDay",
+];
+
+const pickWritable = (body = {}) => {
+  const out = {};
+  for (const key of CLIENT_WRITABLE_FIELDS) {
+    if (body[key] !== undefined) out[key] = body[key];
+  }
+  return out;
+};
+
+/** Parse a client publishAt; anything invalid or in the past means publish now. */
+const parsePublishAt = (value) => {
+  if (!value) return null;
+  const when = new Date(value);
+  if (Number.isNaN(when.getTime())) return null;
+  return when.getTime() > Date.now() ? when : null;
+};
+exports.parsePublishAt = parsePublishAt;
+
+/**
+ * Take the fee off a user, but only if they actually have it. One atomic
+ * operation, so two concurrent posts cannot both pass the balance check.
+ */
+const chargeUser = async (userId, fee) => {
+  if (!fee || fee <= 0) return { ok: true, user: null };
+  const user = await User.findOneAndUpdate(
+    { _id: userId, credit: { $gte: fee } },
+    { $inc: { credit: -fee } },
+    { new: true }
+  ).exec();
+  return { ok: Boolean(user), user };
+};
+exports.chargeUser = chargeUser;
 
 // add Products
-exports.addProductService = async ({ body }) => {
+exports.addProductService = async ({ body, authUserId }) => {
   const response = {
     code: 201,
     status: "success",
@@ -388,29 +481,62 @@ exports.addProductService = async ({ body }) => {
   };
 
   try {
-    const cost = PREMIUM_COST[body.premiumDay] ?? 0;
+    const data = pickWritable(body);
 
-    if (cost > 0) {
-      const user = await User.findById(body.posterId).exec();
-      if (!user || parseFloat(user.credit) < cost) {
-        response.code = 402;
-        response.status = "failed";
-        response.message = "Insufficient credits";
-        return response;
-      }
-      user.credit = parseFloat(user.credit) - cost;
-      await user.save();
+    // Trust the token over the body, so nobody can post as another user.
+    const posterId = authUserId || body.posterId;
+    if (!posterId) {
+      response.code = 401;
+      response.status = "failed";
+      response.message = "You must be signed in to post an ad";
+      return response;
+    }
+    data.posterId = posterId;
+
+    const premiumDay = Number(data.premiumDay) || 0;
+    data.premiumDay = premiumDay;
+
+    const fee = feeForAd({ premiumDay, cities: data.cities });
+    const { ok } = await chargeUser(posterId, fee);
+    if (!ok) {
+      response.code = 402;
+      response.status = "failed";
+      response.message = "Insufficient credits";
+      return response;
     }
 
-    if (body.premiumDay > 0) {
-      body.isPremium = true;
-      body.boostExpiresAt = new Date(
-        Date.now() + body.premiumDay * 60 * 60 * 1000,
-      );
+    data.publishAt = parsePublishAt(body.publishAt);
+
+    // A boost must not start burning before the ad is actually visible.
+    const boostStartsAt = data.publishAt ? data.publishAt.getTime() : Date.now();
+    if (premiumDay > 0) {
+      data.isPremium = true;
+      data.boostExpiresAt = new Date(boostStartsAt + premiumDay * 60 * 60 * 1000);
+    } else {
+      data.isPremium = false;
+      data.boostExpiresAt = undefined;
     }
 
-    const newProduct = new Product(body);
+    // Duplicates, banned words and suspicious links go to the pending queue.
+    const review = await reviewAd(data);
+    data.isApproved = review.isApproved;
+    data.moderationReason = review.moderationReason;
+    data.contentHash = review.contentHash;
+
+    const newProduct = new Product(data);
     await newProduct.save();
+
+    response.data = {
+      id: newProduct._id,
+      isApproved: newProduct.isApproved,
+      moderationReason: newProduct.moderationReason,
+      publishAt: newProduct.publishAt,
+      charged: fee,
+    };
+    if (!newProduct.isApproved) {
+      response.message =
+        "Your ad was submitted for review and will appear once an admin approves it.";
+    }
     return response;
   } catch (error) {
     console.error(error);
@@ -440,6 +566,9 @@ exports.updateProductService = async ({
   age,
   link,
   isDelete,
+  altTexts,
+  imageFileIds,
+  publishAt,
 }) => {
   const response = {
     code: 200,
@@ -473,8 +602,34 @@ exports.updateProductService = async ({
     product.imgTwo = imgTwo ? imgTwo : product.imgTwo;
     product.imgThree = imgThree ? imgThree : product.imgThree;
     product.imgFour = imgFour ? imgFour : product.imgFour;
+    if (Array.isArray(altTexts)) product.altTexts = altTexts;
+    if (Array.isArray(imageFileIds)) product.imageFileIds = imageFileIds;
 
-    console.log(product, "product");
+    // The schedule stays editable only while the ad has not gone live yet.
+    const notYetPublished =
+      product.publishAt && product.publishAt.getTime() > Date.now();
+    if (publishAt !== undefined && notYetPublished) {
+      product.publishAt = parsePublishAt(publishAt);
+    }
+
+    // Re-screen on edit, otherwise a clean ad could be edited into a violating
+    // one and stay published.
+    if (name !== undefined || description !== undefined || link !== undefined) {
+      const review = await reviewAd(
+        {
+          name: product.name,
+          description: product.description,
+          link: product.link,
+          posterId: product.posterId,
+        },
+        { excludeId: product._id }
+      );
+      product.contentHash = review.contentHash;
+      if (!review.isApproved) {
+        product.isApproved = false;
+        product.moderationReason = review.moderationReason;
+      }
+    }
 
     await product.save();
 
@@ -514,6 +669,8 @@ exports.updateApproveService = async ({ id, isApproved }) => {
       return response;
     }
     product.isApproved = isApproved ? isApproved : product.isApproved;
+    // A manual approval overrides the automatic rejection, so drop its reason.
+    if (isApproved) product.moderationReason = undefined;
 
     await product.save();
     response.data.product = product;
@@ -545,7 +702,7 @@ exports.updateApproveMany = async (req, res) => {
 
       const updatedStore = await Product.findByIdAndUpdate(
         id,
-        { $set: { isApproved: true } },
+        { $set: { isApproved: true }, $unset: { moderationReason: "" } },
         { new: true },
       );
     });
@@ -693,7 +850,10 @@ exports.getPostForSitemap = async () => {
   };
 
   try {
-    const posts = await Product.find({}, "category").limit(30000);
+    const posts = await Product.find(
+      { isApproved: true, isDelete: false, ...publishedGate() },
+      "category"
+    ).limit(30000);
     response.data = posts;
     return response;
   } catch (error) {
@@ -714,7 +874,12 @@ exports.getPostForSitemapSecond = async () => {
   };
 
   try {
-    const posts = await Product.find({}, "category").skip(30000).limit(30000);
+    const posts = await Product.find(
+      { isApproved: true, isDelete: false, ...publishedGate() },
+      "category"
+    )
+      .skip(30000)
+      .limit(30000);
     response.data = posts;
     return response;
   } catch (error) {
@@ -735,7 +900,12 @@ exports.getPostForSitemapthird = async () => {
   };
 
   try {
-    const posts = await Product.find({}, "category").skip(60000).limit(30000);
+    const posts = await Product.find(
+      { isApproved: true, isDelete: false, ...publishedGate() },
+      "category"
+    )
+      .skip(60000)
+      .limit(30000);
     response.data = posts;
     return response;
   } catch (error) {
@@ -755,7 +925,12 @@ exports.getPostForSitemapFourth = async () => {
   };
 
   try {
-    const posts = await Product.find({}, "category").skip(90000).limit(30000);
+    const posts = await Product.find(
+      { isApproved: true, isDelete: false, ...publishedGate() },
+      "category"
+    )
+      .skip(90000)
+      .limit(30000);
     response.data = posts;
     return response;
   } catch (error) {
@@ -786,12 +961,14 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
       filter = {
         cities: { $elemMatch: { $eq: state } },
         isApproved: true,
+        ...publishedGate(),
       };
     } else {
       filter = {
         subCategory: category,
         cities: { $elemMatch: { $eq: state } },
         isApproved: true,
+        ...publishedGate(),
       };
     }
 
@@ -850,6 +1027,7 @@ exports.getAllPosts = async ({ page, category, state, cat }) => {
           isPremium: 1,
           age: 1,
           imgOne: 1,
+          altTexts: 1,
           boosted: 1,
         },
       },
@@ -906,7 +1084,7 @@ exports.searchProductService = async ({ q }) => {
   };
 
   try {
-    let query = { isDelete: false };
+    let query = { isDelete: false, isApproved: true, ...publishedGate() };
     if (q !== "undefined" || q !== undefined || q) {
       let regex = new RegExp(q, "i");
       query = {
@@ -1065,15 +1243,19 @@ exports.getOnlyUserPosts = async ({
           createdAt: 1,
           premiumDay: 1,
           boostExpiresAt: 1,
+          isApproved: 1,
+          moderationReason: 1,
+          publishAt: 1,
+          cities: 1,
+          repostCount: 1,
+          lastRepostAt: 1,
         },
       },
     ]);
 
+    // A user with no ads yet is a normal, successful result.
     if (posts.length == 0) {
-      response.code = 404;
-      response.status = "failed";
       response.message = "No Product found";
-      return response;
     }
 
     response.startIndex = skipCount + 1;
@@ -1177,10 +1359,11 @@ exports.getProductService = async ({ id }) => {
       _id: { $ne: products?.[0]?._id },
       isApproved: true,
       isDelete: false,
+      ...publishedGate(),
     })
       .sort({ createdAt: -1 })
       .limit(8)
-      .select("name imgOne");
+      .select("name imgOne altTexts");
 
     if (!products) {
       response.code = 404;
@@ -1193,6 +1376,270 @@ exports.getProductService = async ({ id }) => {
 
     return response;
   } catch (error) {
+    response.code = 500;
+    response.status = "failed";
+    response.message = "Error. Try again";
+    return response;
+  }
+};
+
+/**
+ * Related ads with a circular ("See More" never runs dry) pager.
+ *
+ * Rather than stopping at the end of the list, the offset wraps with a modulo,
+ * so pressing See More keeps cycling through the same subcategory from the top.
+ * If a subcategory has no other ads at all, it falls back to the newest ads
+ * site-wide so the section is never empty.
+ */
+exports.getRelatedProductsService = async ({ id, page, limit }) => {
+  const response = {
+    code: 200,
+    status: "success",
+    message: "Related ads found successfully",
+    data: { related: [], total: 0, hasMore: false, source: "subCategory" },
+  };
+
+  try {
+    const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = Math.min(24, Math.max(1, parseInt(limit, 10) || 8));
+
+    const source = await Product.findById(id).select("subCategory").lean().exec();
+    if (!source) {
+      response.code = 404;
+      response.status = "failed";
+      response.message = "No Product found";
+      return response;
+    }
+
+    const projection = "name imgOne altTexts";
+    const sort = { createdAt: -1 };
+
+    let filter = {
+      subCategory: source.subCategory,
+      _id: { $ne: source._id },
+      isApproved: true,
+      isDelete: false,
+      ...publishedGate(),
+    };
+
+    let total = await Product.countDocuments(filter);
+
+    // Nothing else in this subcategory: widen to the newest ads site-wide.
+    if (total === 0) {
+      response.data.source = "latest";
+      filter = {
+        _id: { $ne: source._id },
+        isApproved: true,
+        isDelete: false,
+        ...publishedGate(),
+      };
+      total = await Product.countDocuments(filter);
+    }
+
+    if (total === 0) {
+      return response;
+    }
+
+    const skip = ((pageNumber - 1) * pageSize) % total;
+    let rows = await Product.find(filter)
+      .sort(sort)
+      .skip(skip)
+      .limit(pageSize)
+      .select(projection)
+      .lean()
+      .exec();
+
+    // The window ran past the end of the list, so wrap around and top it up.
+    if (rows.length < pageSize && total > rows.length) {
+      const remainder = await Product.find(filter)
+        .sort(sort)
+        .limit(pageSize - rows.length)
+        .select(projection)
+        .lean()
+        .exec();
+      rows = rows.concat(remainder);
+    }
+
+    response.data.related = rows;
+    response.data.total = total;
+    response.data.hasMore = total > 0;
+    return response;
+  } catch (error) {
+    console.error(error);
+    response.code = 500;
+    response.status = "failed";
+    response.message = "Error. Try again";
+    return response;
+  }
+};
+
+/**
+ * Repost: push an existing ad back to the top of the listings.
+ *
+ * The fee is recomputed from the stored ad, not sent by the client, so a repost
+ * of a multi-city or boosted ad costs the same as the original did.
+ */
+exports.repostProductService = async ({ id, authUserId }) => {
+  const response = {
+    code: 200,
+    status: "success",
+    message: "Ad reposted successfully",
+    data: {},
+  };
+
+  try {
+    const product = await Product.findById(id).exec();
+    if (!product || product.isDelete) {
+      response.code = 404;
+      response.status = "failed";
+      response.message = "No Product data found";
+      return response;
+    }
+
+    if (!authUserId || String(product.posterId) !== String(authUserId)) {
+      response.code = 403;
+      response.status = "failed";
+      response.message = "You can only repost your own ads";
+      return response;
+    }
+
+    const fee = feeForAd(product);
+    const { ok, user } = await chargeUser(authUserId, fee);
+    if (!ok) {
+      response.code = 402;
+      response.status = "failed";
+      response.message = "Insufficient credits to repost this ad";
+      return response;
+    }
+
+    const now = new Date();
+
+    const update = {
+      lastRepostAt: now,
+      publishAt: null,
+    };
+
+    // Re-arm an existing boost for another full term, since it was paid for again.
+    if (product.premiumDay > 0) {
+      update.isPremium = true;
+      update.boostExpiresAt = new Date(
+        now.getTime() + product.premiumDay * 60 * 60 * 1000
+      );
+    }
+
+    await Product.updateOne(
+      { _id: product._id },
+      { $set: update, $inc: { repostCount: 1 } },
+      { timestamps: false }
+    );
+
+    // Listings sort on createdAt, so moving it forward is what actually bumps
+    // the ad to the top.
+    //
+    // This goes through the native driver on purpose. Mongoose marks the
+    // timestamp paths immutable (createdAt resolves to { immutable: true }), and
+    // it strips immutable paths out of update operations, so doing this through
+    // Product.updateOne() risks the bump silently doing nothing -- the repost
+    // would take the money and leave the ad where it was. The native collection
+    // has no casting or immutability layer, so the write always lands.
+    await Product.collection.updateOne(
+      { _id: product._id },
+      { $set: { createdAt: now, updatedAt: now } }
+    );
+
+    // A repost is identical to itself by definition, so the duplicate check is
+    // skipped here; banned words and links are still re-screened.
+    const review = await reviewAd(
+      {
+        name: product.name,
+        description: product.description,
+        link: product.link,
+        posterId: product.posterId,
+      },
+      { skipDuplicateCheck: true }
+    );
+    if (!review.isApproved) {
+      await Product.updateOne(
+        { _id: product._id },
+        { $set: { isApproved: false, moderationReason: review.moderationReason } },
+        { timestamps: false }
+      );
+      response.message =
+        "Your ad was reposted and sent for review before it goes live again.";
+    }
+
+    if (fee > 0) {
+      await Transactions.create({
+        userId: authUserId,
+        amount: fee,
+        exactAmount: fee,
+        isCompleted: "Done",
+        date: now.toISOString(),
+        invoice: "REPOST-" + product._id,
+        kind: "repost",
+        reference: String(product._id),
+      });
+    }
+
+    response.data = {
+      id: product._id,
+      charged: fee,
+      isApproved: review.isApproved,
+      creditRemaining: user ? user.credit : undefined,
+    };
+    return response;
+  } catch (error) {
+    console.error(error);
+    response.code = 500;
+    response.status = "failed";
+    response.message = "Error. Try again";
+    return response;
+  }
+};
+
+/**
+ * What a repost of this ad would cost, so the UI can confirm the amount before
+ * charging anything.
+ */
+exports.getRepostQuoteService = async ({ id, authUserId }) => {
+  const response = {
+    code: 200,
+    status: "success",
+    message: "Quote generated",
+    data: {},
+  };
+
+  try {
+    const product = await Product.findById(id)
+      .select("posterId premiumDay cities isDelete")
+      .lean()
+      .exec();
+    if (!product || product.isDelete) {
+      response.code = 404;
+      response.status = "failed";
+      response.message = "No Product data found";
+      return response;
+    }
+    if (!authUserId || String(product.posterId) !== String(authUserId)) {
+      response.code = 403;
+      response.status = "failed";
+      response.message = "You can only repost your own ads";
+      return response;
+    }
+
+    const fee = feeForAd(product);
+    const user = await User.findById(authUserId).select("credit").lean().exec();
+
+    response.data = {
+      fee,
+      credit: user ? user.credit : 0,
+      affordable: (user ? Number(user.credit) : 0) >= fee,
+      cities: Array.isArray(product.cities) ? product.cities.length : 0,
+      premiumDay: product.premiumDay || 0,
+    };
+    return response;
+  } catch (error) {
+    console.error(error);
     response.code = 500;
     response.status = "failed";
     response.message = "Error. Try again";

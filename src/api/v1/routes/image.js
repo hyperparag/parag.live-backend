@@ -2,15 +2,10 @@ const router = require('express').Router()
 
 const formidable = require('formidable');
 
-const ImageKit = require("imagekit");
 const fs = require('fs');
-const imagekit = new ImageKit({
-    publicKey: "public_iuZSTU4J+kcli1ecBOxK1xnbkXk=",
-    privateKey: "private_Wmxj+v72RSQZsYBeUT+/qHOq66c=",
-    urlEndpoint: "https://ik.imagekit.io/6p4lsoibt/"
-});
+const { uploadImage } = require("../utils/storage");
 
-
+// Avatars go through the same storage as every other image.
 
 router.post('/upload-file', (req, res) => {
     
@@ -20,22 +15,20 @@ router.post('/upload-file', (req, res) => {
             res.status(500).json({ message: "Internal Server Error" });
             return;
         }
-        const fileRaw = fs.createReadStream(files.images.filepath);
+        const file = files.images;
+        if (!file) {
+            res.status(400).json({ message: 'No file uploaded' });
+            return;
+        }
 
-        imagekit.upload({
-            file: fileRaw, //required
-            fileName: files.images.originalFilename,   //required
-            // extensions: [
-            //     {
-            //         name: "google-auto-tagging",
-            //         maxTags: 5,
-            //         minConfidence: 95
-            //     }
-            // ]
+        uploadImage({
+            buffer: fs.readFileSync(file.filepath),
+            fileName: file.originalFilename,
+            mimeType: file.mimetype,
         }).then(response => {
             res.status(200).json({ message: 'FIle has been uploaded', payload: response });
         }).catch(error => {
-			console.log(error)
+            console.log(error)
             res.status(500).json({ message: 'Error in uploading file' });
         });
     });

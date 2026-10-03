@@ -21,8 +21,19 @@ const userSchema = Schema(
     },
     isDelete: { type: Boolean, default: false },
     credit: { type: Number, default: 0 },
+    // Referral program. referralCode is this user's own shareable code;
+    // referredBy points at the user whose code they used when buying credits.
+    referralCode: { type: String, trim: true, uppercase: true },
+    referredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    // Lifetime bonus earned, and how much of it has been moved into posting
+    // credit. Available to convert = referralEarnings - referralConverted.
+    referralEarnings: { type: Number, default: 0 },
+    referralConverted: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
+
+userSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
+userSchema.index({ referredBy: 1 });
 
 module.exports = model("User", userSchema);

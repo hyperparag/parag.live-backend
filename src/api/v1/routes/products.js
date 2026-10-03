@@ -21,12 +21,24 @@ const {
   getPostsSitemapSecond,
   getPostsSitemapThird,
   getPostsSitemapFourth,
+  getRelatedProducts,
+  repostProduct,
+  getRepostQuote,
 } = require("../product/controller");
 const { updateApproveMany, deleteMany } = require("../product/service");
 
-router.post("/", addProduct);
+// Posting and editing now require a signed-in user: addProductService takes
+// posterId from the token so an ad cannot be created on someone else's behalf.
+router.post("/", verifyToken, addProduct);
 
-router.patch("/:id", updateProduct);
+router.patch("/:id", verifyToken, updateProduct);
+
+// Repost: quote first so the UI can confirm the fee, then charge.
+router.get("/repost-quote/:id", verifyToken, getRepostQuote);
+router.post("/repost/:id", verifyToken, repostProduct);
+
+// Paged, circular related ads for the "See More" button.
+router.get("/:id/related", getRelatedProducts);
 router.get("/posterid/:id", getPosterPost);
 router.get("/admin", verifyAdmin, getAdminPost);
 
@@ -37,15 +49,15 @@ router.get("/sitemap4", getPostsSitemapFourth);
 
 router.patch("/approved/:id", verifyAdmin, updateApprove);
 
-router.post("/many", updateApproveMany);
+router.post("/many", verifyAdmin, updateApproveMany);
 
-router.post("/deleteMany", deleteMany);
+router.post("/deleteMany", verifyAdmin, deleteMany);
 
 router.get("/", getPosts);
 
 router.get("/all", getAllPost);
 
-router.delete("/:id", deleteProduct);
+router.delete("/:id", verifyToken, deleteProduct);
 
 router.get("/search", searchProduct);
 

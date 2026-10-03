@@ -3,6 +3,26 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { updatedTransactionStatus } = require("../transaction/services");
 
+/**
+ * Short, human-typeable referral code. Ambiguous characters (0/O, 1/I) are
+ * excluded because people read these off a screen and retype them.
+ */
+const REFERRAL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+const generateReferralCode = async () => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    let code = "";
+    for (let i = 0; i < 8; i += 1) {
+      code += REFERRAL_ALPHABET[Math.floor(Math.random() * REFERRAL_ALPHABET.length)];
+    }
+    const taken = await User.exists({ referralCode: code });
+    if (!taken) return code;
+  }
+  // Astronomically unlikely; fall back to something guaranteed unique.
+  return "R" + Date.now().toString(36).toUpperCase();
+};
+exports.generateReferralCode = generateReferralCode;
+
 const generateJwtToken = ({
   _id,
   firstName,
@@ -27,7 +47,16 @@ exports.saveUser = async (req, res) => {
     const isExist = await User.findOne({ email: email });
 
     if (isExist) {
-      return res.status(201).json({ message: "success", isExist });
+      // Backfill a referral code for accounts created before the programme.
+      if (!isExist.referralCode) {
+        isExist.referralCode = await generateReferralCode();
+        await isExist.save();
+      }
+      return res.status(201).json({
+        message: "success",
+        isExist,
+        token: generateJwtToken(isExist),
+      });
     }
     const data = {
       firstName: given_name,
@@ -35,10 +64,15 @@ exports.saveUser = async (req, res) => {
       email,
       avater: picture,
       credit: 0,
+      referralCode: await generateReferralCode(),
     };
 
     const createdUser = await User.create(data);
-    return res.status(201).json({ message: "success", isExist: createdUser });
+    return res.status(201).json({
+      message: "success",
+      isExist: createdUser,
+      token: generateJwtToken(createdUser),
+    });
   } catch (error) {
     console.log(error);
     res.status(500).json({ message: "Invalid" });
@@ -67,6 +101,7 @@ exports.addUserService = async (req, res) => {
         avater,
         password: hashedPassword,
         address,
+        referralCode: await generateReferralCode(),
       });
 
       await newUser.save();
@@ -208,7 +243,6 @@ exports.updateUserService = async ({
   email,
   phone,
   avater,
-  credit,
 }) => {
   const response = {
     code: 200,
@@ -234,13 +268,7 @@ exports.updateUserService = async ({
     user.phone = phone ? phone : user.phone;
     user.avater = avater ? avater : user.avater;
 
-    if (credit == 0) {
-      user.credit = 0;
-    }
-
-    user.credit = parseFloat(credit)
-      ? parseFloat(credit)
-      : parseFloat(user.credit);
+    // credit is deliberately NOT writable here -- see the comment above.
 
     await user.save();
 

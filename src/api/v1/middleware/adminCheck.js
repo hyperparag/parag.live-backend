@@ -13,8 +13,12 @@ function verifyAdmin(req, res, next) {
       }
       if (decoded.role == "admin" || decoded.role == "superAdmin") {
         req.decoded = decoded;
-        next();
+        return next();
       }
+      // Previously this branch did nothing at all: a valid token belonging to a
+      // non-admin neither continued nor responded, so the request hung until the
+      // gateway timed it out.
+      return res.status(403).json({ message: "Forbidden" });
     });
   } catch (error) {
     console.log(error);

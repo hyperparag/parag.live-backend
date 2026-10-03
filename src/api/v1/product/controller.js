@@ -15,15 +15,47 @@ const {
   getPostForSitemapSecond,
   getPostForSitemapthird,
   getPostForSitemapFourth,
+  getRelatedProductsService,
+  repostProductService,
+  getRepostQuoteService,
 } = require("./service");
 
 // add Products
 exports.addProduct = async (req, res) => {
-  const { status, code, message } = await addProductService({
+  const { status, code, message, data } = await addProductService({
     body: req.body,
     ...req.body,
+    authUserId: req.decoded?._id,
   });
-  res.status(code).json({ code, status, message });
+  res.status(code).json({ code, status, message, data });
+};
+
+// related ads, paged and circular
+exports.getRelatedProducts = async (req, res) => {
+  const { status, code, message, data } = await getRelatedProductsService({
+    id: req.params.id,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  res.status(code).json({ code, status, message, data });
+};
+
+// what a repost would cost
+exports.getRepostQuote = async (req, res) => {
+  const { status, code, message, data } = await getRepostQuoteService({
+    id: req.params.id,
+    authUserId: req.decoded?._id,
+  });
+  res.status(code).json({ code, status, message, data });
+};
+
+// bump an ad back to the top, charging the original fee again
+exports.repostProduct = async (req, res) => {
+  const { status, code, message, data } = await repostProductService({
+    id: req.params.id,
+    authUserId: req.decoded?._id,
+  });
+  res.status(code).json({ code, status, message, data });
 };
 
 // update Products

@@ -1,4 +1,8 @@
+const mongoose = require("mongoose");
 const { Reports } = require("../models");
+
+const isObjectId = (value) =>
+  Boolean(value) && mongoose.Types.ObjectId.isValid(String(value));
 
 exports.addReportServices = async ({ body }) => {
   const response = {
@@ -8,7 +12,37 @@ exports.addReportServices = async ({ body }) => {
   };
 
   try {
-    const newReport = new Reports(body);
+    // The ad detail page used to send only the second character of the post id,
+    // so the ObjectId cast threw and every report was swallowed as a 500. Tell
+    // the caller what is wrong instead of losing the report silently.
+    if (!isObjectId(body.postId)) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "A valid post is required to file a report";
+      return response;
+    }
+    if (!isObjectId(body.posterId)) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "A valid ad owner is required to file a report";
+      return response;
+    }
+    if (!body.subject || !String(body.subject).trim()) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "Please give the report a subject";
+      return response;
+    }
+
+    const newReport = new Reports({
+      subject: String(body.subject).trim(),
+      reportDesc: body.reportDesc ? String(body.reportDesc).trim() : "",
+      postId: body.postId,
+      posterId: body.posterId,
+      // Optional: an anonymous report is still worth receiving.
+      reporterId: isObjectId(body.reporterId) ? body.reporterId : undefined,
+      isRead: false,
+    });
     await newReport.save();
     return response;
   } catch (error) {
@@ -66,11 +100,10 @@ exports.getReportsServices = async ({page}) => {
       },
     ]);
 
+    // An empty list is a successful, empty result. Returning 404 here made the
+    // admin table treat "no reports yet" as a failure.
     if (reports.length === 0) {
-      response.code = 404;
-      response.status = "failded";
-      response.message = "No Product data found";
-      return response;
+      response.message = "No reports found";
     }
 
     response.data = {
