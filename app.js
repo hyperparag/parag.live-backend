@@ -50,7 +50,7 @@ app.get("/api/csrf-token", (req, res) => {
   res.json({ csrfToken: "" });
 });
 app.get("/", (req, res) => {
-  res.json({ message: "server is s running" });
+  res.json({ message: "server is running" });
 });
 
 module.exports = app;
