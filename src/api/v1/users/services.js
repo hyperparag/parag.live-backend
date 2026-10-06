@@ -1,7 +1,7 @@
-const { User, Product, Deposit } = require("../models");
+const { User, Product, Deposit, Transactions } = require("../models");
+const { payReferralBonus } = require("../utils/referral");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { updatedTransactionStatus } = require("../transaction/services");
 
 /**
  * Short, human-typeable referral code. Ambiguous characters (0/O, 1/I) are
@@ -22,6 +22,13 @@ const generateReferralCode = async () => {
   return "R" + Date.now().toString(36).toUpperCase();
 };
 exports.generateReferralCode = generateReferralCode;
+
+// Never hand the password hash back to a client.
+const withoutPassword = (doc) => {
+  const obj = doc && doc.toObject ? doc.toObject() : { ...doc };
+  delete obj.password;
+  return obj;
+};
 
 const generateJwtToken = ({
   _id,
@@ -181,6 +188,7 @@ exports.getUsersService = async (req, res) => {
   const skipCount = (pageNumber - 1) * limit;
 
   const users = await User.find(query)
+    .select("-password")
     .sort({ _id: -1 })
     .skip(skipCount)
     .limit(limit);
@@ -225,7 +233,7 @@ exports.updateUserAddressService = async ({
 
     await user.save();
 
-    response.data.user = user;
+    response.data.user = withoutPassword(user);
 
     return response;
   } catch (error) {
@@ -272,7 +280,7 @@ exports.updateUserService = async ({
 
     await user.save();
 
-    response.data.user = user;
+    response.data.user = withoutPassword(user);
 
     return response;
   } catch (error) {
@@ -291,35 +299,167 @@ exports.updateCreditService = async ({ id, credit, isUpdate }) => {
     data: {},
   };
 
-  console.log(isUpdate);
-
   try {
-    const user = await User.findOne({
-      _id: id,
-    }).exec();
-    if (!User) {
+    const amount = parseFloat(credit);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "Enter a valid credit amount";
+      return response;
+    }
+
+    const existing = await User.findOne({ _id: id }).select("_id").lean();
+    if (!existing) {
       response.code = 422;
       response.status = "failed";
       response.message = "No User data found";
       return response;
     }
 
-    user.credit = parseFloat(user.credit) + parseFloat(credit);
-
-    await user.save();
-
-    response.data.user = user;
-
+    let deposit = null;
     if (isUpdate) {
-      const filter = { _id: isUpdate };
-      const update = { status: "completed" };
-      const depo = await Deposit.findOneAndUpdate(filter, update, {
-        new: true,
-      });
+      // Claim the deposit first, atomically. Two admins pressing Give Credit on
+      // the same row used to credit the user twice.
+      deposit = await Deposit.findOneAndUpdate(
+        {
+          _id: isUpdate,
+          userId: String(id),
+          isDelete: false,
+          status: { $ne: "completed" },
+        },
+        { status: "completed" },
+        { new: true }
+      );
+      if (!deposit) {
+        response.code = 409;
+        response.status = "failed";
+        response.message =
+          "This deposit was already credited, deleted, or does not belong to this user.";
+        return response;
+      }
     }
 
+    // $inc, so concurrent credits cannot overwrite each other.
+    const user = await User.findOneAndUpdate(
+      { _id: id },
+      { $inc: { credit: amount } },
+      { new: true }
+    );
+
+    // The ledger entry: what the user sees as "Credit purchase".
+    const paid = deposit ? parseFloat(deposit.amount) : amount;
+    try {
+      await Transactions.create({
+        userId: id,
+        amount,
+        exactAmount: Number.isFinite(paid) ? paid : amount,
+        isCompleted: "Done",
+        date: new Date().toDateString(),
+        invoice: deposit ? `DEP-${deposit.trxid}` : `ADM-${Date.now()}`,
+        kind: deposit ? "recharge" : "admin-credit",
+        reference: deposit ? String(deposit._id) : undefined,
+        eventId: deposit ? `deposit:${deposit._id}` : undefined,
+        isDelete: false,
+      });
+    } catch (ledgerError) {
+      console.error("[credit] could not write the ledger entry:", ledgerError);
+    }
+
+    // Pay the referrer, based on what was actually paid (not on bonus credit).
+    if (deposit && Number.isFinite(paid) && paid > 0) {
+      try {
+        await payReferralBonus({
+          buyerId: id,
+          paidAmount: paid,
+          referralCode: deposit.referralCode,
+          eventId: `deposit:${deposit._id}`,
+        });
+      } catch (referralError) {
+        console.error("[referral] payout failed:", referralError);
+      }
+    }
+
+    response.data.user = withoutPassword(user);
     return response;
   } catch (error) {
+    console.log(error);
+    response.code = 500;
+    response.status = "failed";
+    response.message = "Error. Try again";
+    return response;
+  }
+};
+
+/**
+ * Admin: hand a bonus to selected users.
+ *   type "earn"   - added to the user's earnings (they can convert it to credit,
+ *                   exactly like referral earnings)
+ *   type "credit" - added straight to posting credit
+ * Every payout is written to the ledger so the user sees it in Transaction
+ * History and the admin can audit it.
+ */
+exports.giveBonusService = async ({ userIds, amount, type, note }) => {
+  const response = {
+    code: 200,
+    status: "success",
+    message: "Bonus sent",
+    given: 0,
+  };
+
+  try {
+    const value = Math.round(parseFloat(amount) * 100) / 100;
+    if (!Number.isFinite(value) || value <= 0 || value > 10000) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "Enter an amount between 0.01 and 10,000.";
+      return response;
+    }
+    const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map(String))].slice(0, 500);
+    if (ids.length === 0) {
+      response.code = 422;
+      response.status = "failed";
+      response.message = "Select at least one user.";
+      return response;
+    }
+
+    if (type !== "earn" && type !== "credit") {
+      response.code = 422;
+      response.status = "failed";
+      response.message = 'Type must be "earn" or "credit".';
+      return response;
+    }
+    const asEarnings = type !== "credit";
+    const cleanNote = String(note || "").trim().slice(0, 200);
+
+    for (const userId of ids) {
+      const update = asEarnings
+        ? { $inc: { referralEarnings: value } }
+        : { $inc: { credit: value } };
+      const user = await User.findOneAndUpdate(
+        { _id: userId, isDelete: false },
+        update,
+        { new: true }
+      ).select("_id");
+      if (!user) continue;
+
+      await Transactions.create({
+        userId,
+        amount: value,
+        exactAmount: value,
+        isCompleted: "Done",
+        date: new Date().toDateString(),
+        invoice: `BONUS-${Date.now()}-${response.given}`,
+        kind: asEarnings ? "earn-bonus" : "admin-credit",
+        note: cleanNote || undefined,
+        isDelete: false,
+      });
+      response.given += 1;
+    }
+
+    response.message = `Bonus of $${value.toFixed(2)} sent to ${response.given} user(s).`;
+    return response;
+  } catch (error) {
+    console.log(error);
     response.code = 500;
     response.status = "failed";
     response.message = "Error. Try again";
@@ -355,7 +495,7 @@ exports.updatePassordService = async ({ id, password, oldPassword }) => {
 
       await user.save();
 
-      response.data.user = user;
+      response.data.user = withoutPassword(user);
 
       return response;
     } else {
@@ -457,7 +597,8 @@ exports.getUserService = async ({ id }) => {
       _id: id,
       isDelete: false,
     })
-      .select("-__v -isDelete")
+      // The password hash was being sent to every caller of this public route.
+      .select("-__v -isDelete -password")
       .exec();
 
     if (!response.data.user) {

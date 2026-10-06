@@ -42,6 +42,15 @@ exports.updateUser = async (req, res) => {
   res.status(code).json({ code, status, message });
 };
 
+// Admin: give a bonus to selected users.
+exports.giveBonus = async (req, res) => {
+  const { giveBonusService } = require("./services");
+  const { status, code, message, given } = await giveBonusService({
+    ...req.body,
+  });
+  res.status(code).json({ code, status, message, given });
+};
+
 // update Users
 exports.updateCredit = async (req, res) => {
   const { status, code, message, data } = await updateCreditService({

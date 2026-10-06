@@ -14,11 +14,23 @@ const transactionSchema = Schema(
     // ad spends and boosts left no ledger entry at all.
     kind: {
       type: String,
-      enum: ["recharge", "ad-spend", "repost", "referral-bonus", "referral-convert"],
+      enum: [
+        "recharge",
+        "ad-spend",
+        "repost",
+        "referral-bonus",
+        "referral-convert",
+        // Money the admin hands out: "earn-bonus" lands in the user's earnings
+        // (convertible to credit), "admin-credit" is posting credit directly.
+        "earn-bonus",
+        "admin-credit",
+      ],
       default: "recharge",
     },
     // Ad id for a spend/repost, or the referred buyer for a referral bonus.
     reference: { type: String, trim: true },
+    // Free-text reason, shown to the user (e.g. the note on an admin bonus).
+    note: { type: String, trim: true },
     // Payment-provider event id. Unique, so a replayed webhook cannot pay twice.
     eventId: { type: String, trim: true },
   },

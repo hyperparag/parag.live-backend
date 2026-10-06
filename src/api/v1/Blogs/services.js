@@ -18,6 +18,37 @@ const {
 //   region: bucket_Region,
 // });
 
+/**
+ * Scheduled posts: a blog with a future publishAt stays hidden from every public
+ * query until that time passes. Enforced at read time, so it does not depend on
+ * how often any cron runs.
+ */
+const publishedGate = () => ({
+  $or: [
+    { publishAt: null },
+    { publishAt: { $exists: false } },
+    { publishAt: { $lte: new Date() } },
+  ],
+});
+
+/** Parse a client publishAt; anything invalid or in the past means publish now. */
+const parsePublishAt = (value) => {
+  if (!value) return null;
+  const when = new Date(value);
+  if (Number.isNaN(when.getTime())) return null;
+  return when.getTime() > Date.now() ? when : null;
+};
+
+// Where a post sits in the public list: the latest repost, else its go-live
+// time, else when it was created.
+const sortAtStage = {
+  $addFields: {
+    sortAt: {
+      $ifNull: ["$lastRepostAt", { $ifNull: ["$publishAt", "$createdAt"] }],
+    },
+  },
+};
+
 exports.addBlogServices = async ({ body }) => {
   const response = {
     code: 201,
@@ -45,7 +76,7 @@ exports.getBlogsForSitemap = async () => {
     data: {},
   };
   try {
-    const blogs = await Blogs.find({}, "permalink");
+    const blogs = await Blogs.find(publishedGate(), "permalink");
 
     response.data = blogs;
     return response;
@@ -102,10 +133,15 @@ exports.getBlogsServices = async ({ q, page, cat }) => {
       matchStage.$match = {};
     }
 
+    // Only published posts reach the public list.
+    matchStage.$match = { $and: [matchStage.$match, publishedGate()] };
+    forPage = { $and: [forPage, publishedGate()] };
+
     const blogs = await Blogs.aggregate([
       matchStage,
+      sortAtStage,
       {
-        $sort: { _id: -1 },
+        $sort: { sortAt: -1, _id: -1 },
       },
       { $skip: skipCount },
       {
@@ -117,10 +153,10 @@ exports.getBlogsServices = async ({ q, page, cat }) => {
           title: 1,
           category: 1,
           image: 1,
+          altText: 1,
         },
       },
     ]);
-    console.log(blogs);
     // for (const blog of blogs) {
     //   const url = `https://dk3vy6fruyw6l.cloudfront.net/${blog.image}`;
     //   blog.image = url;
@@ -150,7 +186,7 @@ exports.getBlogsServices = async ({ q, page, cat }) => {
   }
 };
 
-exports.getBlogsAdminServices = async ({ q, page, cat, subCat }) => {
+exports.getBlogsAdminServices = async ({ q, page, cat }) => {
   const response = {
     code: 200,
     status: "success",
@@ -166,74 +202,19 @@ exports.getBlogsAdminServices = async ({ q, page, cat, subCat }) => {
     const limit = 6;
     const skipCount = (pageNumber - 1) * limit;
 
-    let forPage = {};
-    if (q && cat && subCat) {
-      forPage = {
-        category: catregex,
-        title: regex,
-        subCategory: subCat,
-      };
-    } else if (q && cat) {
-      forPage = {
-        category: catregex,
-        title: regex,
-      };
-    } else if (q && subCat) {
-      forPage = {
-        title: regex,
-        subCategory: subCat,
-      };
-    } else if (cat && subCat) {
-      forPage = {
-        category: catregex,
-        subCategory: subCat,
-      };
-    } else if (q) {
-      forPage = { title: regex };
-    } else if (cat) {
-      forPage = { category: catregex };
-    } else if (subCat) {
-      forPage = { subCategory: subCat };
-    } else {
-      forPage = {};
-    }
+    // Admins see every post, including scheduled ones.
+    const filter = {};
+    if (q) filter.title = regex;
+    if (cat) filter.category = catregex;
 
-    let matchStage = {};
-    if (q && cat && subCat) {
-      matchStage.$match = {
-        category: catregex,
-        title: regex,
-        subCategory: subCat,
-      };
-    } else if (q && cat) {
-      matchStage.$match = {
-        category: catregex,
-        title: regex,
-      };
-    } else if (q && subCat) {
-      matchStage.$match = {
-        title: regex,
-        subCategory: subCat,
-      };
-    } else if (cat && subCat) {
-      matchStage.$match = {
-        category: catregex,
-        subCategory: subCat,
-      };
-    } else if (q) {
-      matchStage.$match = { title: regex };
-    } else if (cat) {
-      matchStage.$match = { category: catregex };
-    } else if (subCat) {
-      matchStage.$match = { subCategory: subCat };
-    } else {
-      matchStage.$match = {};
-    }
+    const matchStage = { $match: filter };
+    const forPage = filter;
 
     const blogs = await Blogs.aggregate([
       matchStage,
+      sortAtStage,
       {
-        $sort: { _id: -1 },
+        $sort: { sortAt: -1, _id: -1 },
       },
       { $skip: skipCount },
       {
@@ -245,8 +226,10 @@ exports.getBlogsAdminServices = async ({ q, page, cat, subCat }) => {
           category: 1,
           status: 1,
           writer: 1,
-          subCategory: 1,
           createdAt: 1,
+          publishAt: 1,
+          repostCount: 1,
+          lastRepostAt: 1,
         },
       },
     ]);
@@ -284,7 +267,7 @@ exports.singleBlogServices = async ({ q }) => {
   };
 
   try {
-    const blogs = await Blogs.find({ permalink: q });
+    const blogs = await Blogs.find({ permalink: q, ...publishedGate() });
     if (!blogs) {
       response.code = 404;
       response.status = "failed";
@@ -350,9 +333,10 @@ exports.updateBlogServices = async ({
   id,
   title,
   category,
-  subCategory,
   desc,
   image,
+  altText,
+  publishAt,
   writer,
   status,
   permalink,
@@ -380,9 +364,11 @@ exports.updateBlogServices = async ({
     blog.title = title ? title : blog.title;
     blog.permalink = permalink ? permalink : blog.permalink;
     blog.category = category ? category : blog.category;
-    blog.subCategory = subCategory ? subCategory : blog.subCategory;
     blog.desc = desc ? desc : blog.desc;
     blog.image = image ? image : blog.image;
+    if (altText !== undefined) blog.altText = altText;
+    // An empty value means "post now"; only touch the schedule if it was sent.
+    if (publishAt !== undefined) blog.publishAt = parsePublishAt(publishAt);
     blog.writer = writer ? writer : blog.writer;
     blog.status = status ? status : blog.status;
     blog.metaDesc = metaDesc ? metaDesc : blog.metaDesc;
@@ -435,27 +421,18 @@ exports.deleteMany = async (req, res) => {
   const ids = req.body;
 
   try {
-    await Blogs.deleteMany(
-      {
-        _id: {
-          $in: ids,
-        },
+    await Blogs.deleteMany({
+      _id: {
+        $in: Array.isArray(ids) ? ids : [],
       },
-      function (err, result) {
-        if (err) {
-          res.json(err);
-        } else {
-          res.json(result);
-        }
-      },
-    );
+    });
 
     res
       .status(200)
       .json({ status: "success", message: "Deleted successfully" });
   } catch (e) {
     console.log(e);
-    // res.status(500).json({ message: "Something went wrong in /edit-order" });
+    res.status(500).json({ message: "Something went wrong deleting posts" });
   }
 };
 
@@ -513,5 +490,45 @@ exports.updatePablishMany = async (req, res) => {
   } catch (e) {
     console.log(e);
     res.status(500).json({ message: "Something went wrong in /edit-order" });
+  }
+};
+
+/**
+ * Repost: push an existing blog post back to the top of the public list.
+ * Blogs are written by admins only, so unlike an ad repost there is no fee.
+ */
+exports.repostBlogServices = async ({ id }) => {
+  const response = {
+    code: 200,
+    status: "success",
+    message: "Blog reposted successfully",
+    data: {},
+  };
+
+  try {
+    const blog = await Blogs.findOneAndUpdate(
+      { _id: id },
+      {
+        $set: { lastRepostAt: new Date(), publishAt: null },
+        $inc: { repostCount: 1 },
+      },
+      { new: true }
+    ).exec();
+
+    if (!blog) {
+      response.code = 404;
+      response.status = "failed";
+      response.message = "No Blog data found";
+      return response;
+    }
+
+    response.data.blog = blog;
+    return response;
+  } catch (error) {
+    console.log(error);
+    response.code = 500;
+    response.status = "failed";
+    response.message = "Error. Try again";
+    return response;
   }
 };

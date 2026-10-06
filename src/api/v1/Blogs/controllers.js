@@ -7,6 +7,7 @@ const {
   getBlogsAdminServices,
   singleBlogByIdServices,
   getBlogsForSitemap,
+  repostBlogServices,
 } = require("./services");
 
 exports.addBlog = async (req, res) => {
@@ -83,4 +84,11 @@ exports.deleteBlog = async (req, res) => {
     ...req.params,
   });
   res.status(code).json({ code, status, message });
+};
+
+exports.repostBlog = async (req, res) => {
+  const { status, code, message, data } = await repostBlogServices({
+    ...req.params,
+  });
+  res.status(code).json({ code, status, message, data });
 };

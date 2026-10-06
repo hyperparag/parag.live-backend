@@ -3,14 +3,31 @@ const {
   getDepositService,
   updateStatusService,
   getDepositService2,
+  deleteDepositService,
+  deleteManyDepositsService,
 } = require("./service");
 
 exports.addDeposit = async (req, res) => {
   const { status, code, message } = await addDepositService({
     body: req.body,
-    ...req.body,
+    authUserId: req.decoded?._id,
+    authEmail: req.decoded?.email,
   });
   res.status(code).json({ code, status, message });
+};
+
+exports.deleteDeposit = async (req, res) => {
+  const { status, code, message } = await deleteDepositService({
+    ...req.params,
+  });
+  res.status(code).json({ code, status, message });
+};
+
+exports.deleteManyDeposits = async (req, res) => {
+  const { status, code, message, deleted } = await deleteManyDepositsService({
+    ids: req.body?.ids,
+  });
+  res.status(code).json({ code, status, message, deleted });
 };
 
 exports.getDeposits = async (req, res) => {

@@ -1,10 +1,12 @@
-const { addTransactionServices, getTransactionsServices, updateTransactionServices , deleteTransactionServices } = require("./services");
-
-
-
+const {
+  addTransactionServices,
+  getTransactionsServices,
+  getMyTransactionsService,
+  updateTransactionServices,
+  deleteTransactionServices,
+} = require("./services");
 
 exports.addTransaction = async (req, res) => {
-
   const { status, code, message } = await addTransactionServices({
     body: req.body,
     ...req.body,
@@ -12,47 +14,37 @@ exports.addTransaction = async (req, res) => {
   res.status(code).json({ code, status, message });
 };
 
-exports.getTransaction = async(req , res)=>{
-  const {status , code , message, data} = await getTransactionsServices({
-    ...req.query,
+// Admin: all transactions.
+exports.getTransaction = async (req, res) => {
+  const { status, code, message, data, total, startIndex } =
+    await getTransactionsServices({ ...req.query });
+  res.status(code).json({ code, status, message, data, total, startIndex });
+};
+
+// The signed-in user's own history. The id comes from the token, never the URL.
+exports.getMyTransactions = async (req, res) => {
+  const { status, code, message, data, total, summary } =
+    await getMyTransactionsService({
+      userId: req.decoded?._id,
+      ...req.query,
+    });
+  res.status(code).json({ code, status, message, data, total, summary });
+};
+
+exports.updateTransactions = async (req, res) => {
+  const { status, code, message, data } = await updateTransactionServices({
+    ...req.params,
+    ...req.body,
   });
-  if (data) {
-    return res.status(code).json({ code, status, message, data });
-  }
-  res.status(code).json({ code, status, message });
-}
-exports.getTransactionUser = async (req, res) => {
-  const { status, code, message, data } = await getTransactionsUserServices({
-    ...req.query,
-  });
-  if (data) {
+  if (data.transactions) {
     return res.status(code).json({ code, status, message, data });
   }
   res.status(code).json({ code, status, message });
 };
 
-
-  // update Transactions
-  exports.updateTransactions = async (req, res) => {
-    const { status, code, message, data } = await updateTransactionServices({
-      ...req.params,
-      ...req.body,
-    });
-    if (data.transactions) {
-      return res.status(code).json({ code, status, message, data });
-    }
-    res.status(code).json({ code, status, message });
-  };
-  
-
-  // update Transactions
-  exports.deleteTransaction = async (req, res) => {
-    const { status, code, message } = await deleteTransactionServices({
-      ...req.params,
-    });
-    res.status(code).json({ code, status, message });
-  };
-  
-
-  
-
+exports.deleteTransaction = async (req, res) => {
+  const { status, code, message } = await deleteTransactionServices({
+    ...req.params,
+  });
+  res.status(code).json({ code, status, message });
+};
