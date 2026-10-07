@@ -8,6 +8,12 @@ dotenv.config({
     `../../../../${process.env.NODE_ENV ?? ""}.env`,
   ),
 });
+// Some local networks/ISPs refuse the SRV lookup that mongodb+srv:// needs
+// ("querySrv ECONNREFUSED"). Use public DNS when running locally; Vercel's
+// resolver works fine, so leave it alone there.
+if (!process.env.VERCEL) {
+  require("dns").setServers(["8.8.8.8", "1.1.1.1"]);
+}
 // nrrabby871_db_user
 // rqHlneR3X2mOHrzc
 module.exports = {
@@ -19,6 +25,6 @@ module.exports = {
       .connect(
         "mongodb+srv://parag0045_db_user:DHitZqC50v1XPGpl@cluster0.tvtilag.mongodb.net/skipthegames?appName=Cluster0",
       )
-      .then(console.log(`DB connection successfull`))
+      .then(() => console.log(`DB connection successfull`))
       .catch((error) => console.log(`Error to connect DB: ${error.message}`)),
 };
