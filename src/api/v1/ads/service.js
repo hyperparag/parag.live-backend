@@ -61,6 +61,30 @@ exports.getAds = async (req, res) => {
  * that rarely matches a page category string exactly, which is the main reason
  * side ads looked switched off everywhere.
  */
+/**
+ * The admin panel saves one copy of a side ad per category, so the newest rows
+ * across all categories are mostly copies of the same ad. The fallback took
+ * those rows as they came, which showed one ad four times on every page whose
+ * category matched no side ad (e.g. "Transgender" blogs), while pages with a
+ * matching category looked fine. Copies share title and link; keep one.
+ */
+const distinctAds = (rows, limit) => {
+  const seen = new Set();
+  const out = [];
+  for (const ad of rows) {
+    const key = `${(ad.title || "").trim().toLowerCase()}|${(ad.link || "").trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ad);
+    if (out.length === limit) break;
+  }
+  return out;
+};
+
+// Enough rows to find `limit` distinct ads even when each is copied into every
+// category. Side ads number in the tens, so this stays small.
+const CANDIDATE_ROWS = 200;
+
 exports.getAdsbyCategory = async (req, res) => {
   const category = req.query.category;
   const wantsFallback =
@@ -71,19 +95,21 @@ exports.getAdsbyCategory = async (req, res) => {
     let ads = [];
 
     if (category) {
-      ads = await Ads.find({ ...VISIBLE, category })
+      const rows = await Ads.find({ ...VISIBLE, category })
         .sort({ _id: -1 })
-        .limit(limit)
+        .limit(CANDIDATE_ROWS)
         .lean()
         .exec();
+      ads = distinctAds(rows, limit);
     }
 
     if (ads.length === 0 && (wantsFallback || !category)) {
-      ads = await Ads.find(VISIBLE)
+      const rows = await Ads.find(VISIBLE)
         .sort({ _id: -1 })
-        .limit(limit)
+        .limit(CANDIDATE_ROWS)
         .lean()
         .exec();
+      ads = distinctAds(rows, limit);
     }
 
     return res.status(200).json({ ads });
