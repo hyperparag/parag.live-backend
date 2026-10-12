@@ -7,8 +7,8 @@
     "node": "24.x"
   },
   "scripts": {
-    "start": "node ./index.js",
-    "dev": "set NODE_ENV=dev&& nodemon index.js",
+    "start": "node api.js && node ./index.js",
+    "dev": "node api.js && set NODE_ENV=dev&& nodemon index.js",
     "prod": "set NODE_ENV=prod&& node index.js"
   },
   "keywords": [],
