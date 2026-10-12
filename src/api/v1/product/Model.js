@@ -12,6 +12,8 @@ const productSchema = Schema({
   city: { type: String },
   link : {type : String},
   age: { type: String },
+  // Optional free-text location the poster gives on the post form.
+  location: { type: String, trim: true, maxlength: 100 },
   cities: { type: Array },
   isApproved : { type : Boolean , default: false },
   imgOne: {type : String},
