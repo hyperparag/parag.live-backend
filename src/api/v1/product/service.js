@@ -432,6 +432,7 @@ const CLIENT_WRITABLE_FIELDS = [
   "cities",
   "link",
   "age",
+  "location",
   "imgOne",
   "imgTwo",
   "imgThree",
@@ -483,6 +484,8 @@ exports.addProductService = async ({ body, authUserId }) => {
 
   try {
     const data = pickWritable(body);
+    // Over-long input would fail the schema's maxlength and lose the whole ad.
+    if (data.location !== undefined) data.location = String(data.location).slice(0, 100);
 
     // Trust the token over the body, so nobody can post as another user.
     const posterId = authUserId || body.posterId;
@@ -570,6 +573,7 @@ exports.updateProductService = async ({
   imgThree,
   imgFour,
   age,
+  location,
   link,
   isDelete,
   altTexts,
@@ -608,6 +612,8 @@ exports.updateProductService = async ({
     product.name = name ? name : product.name;
     product.link = link ? link : product.link;
     product.age = age ? age : product.age;
+    // Optional, so an empty string is allowed: it clears the location.
+    if (location !== undefined) product.location = String(location).slice(0, 100);
     product.category = category ? category : product.category;
     product.subCategory = subCategory ? subCategory : product.subCategory;
     product.description = description ? description : product.description;
