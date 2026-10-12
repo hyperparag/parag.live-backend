@@ -42,7 +42,10 @@ const generateJwtToken = ({
     { _id, firstName, lastName, avater, email, role },
     process.env.JWT_SECRET,
     {
-      expiresIn: "1d",
+      // Matches the NextAuth session (30 days by default). The token is minted
+      // once at sign-in and never refreshed, so with "1d" every write endpoint
+      // started answering 403 Forbidden a day after login.
+      expiresIn: "30d",
     },
   );
 };

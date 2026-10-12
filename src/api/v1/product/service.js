@@ -27,7 +27,8 @@ const {
 // });
 
 const moment = require("moment/moment");
-const { reviewAd, contentHash } = require("../utils/moderation");
+const { reviewAd, contentHash, describeReasons } = require("../utils/moderation");
+const { sanitizeHtml, hasUnsafeHtml } = require("../utils/sanitizeHtml");
 const { PREMIUM_COST, MULTI_CITY_RATE } = require("../config/pricing");
 
 /**
@@ -517,11 +518,14 @@ exports.addProductService = async ({ body, authUserId }) => {
       data.boostExpiresAt = undefined;
     }
 
-    // Duplicates, banned words and suspicious links go to the pending queue.
-    const review = await reviewAd(data);
+    // Anything that breaks the posting rules goes to the pending queue for an
+    // admin to approve or delete. Reviewed before sanitizing, so hand-crafted
+    // markup is still visible to the unsafe-html check.
+    const review = await reviewAd(data, { checkPostingRate: true });
     data.isApproved = review.isApproved;
     data.moderationReason = review.moderationReason;
     data.contentHash = review.contentHash;
+    data.description = sanitizeHtml(data.description);
 
     const newProduct = new Product(data);
     await newProduct.save();
@@ -535,7 +539,9 @@ exports.addProductService = async ({ body, authUserId }) => {
     };
     if (!newProduct.isApproved) {
       response.message =
-        "Your ad was submitted for review and will appear once an admin approves it.";
+        "Your ad was submitted for review and will appear once an admin approves it. " +
+        describeReasons(review.reasons);
+      response.data.reasons = review.reasons;
     }
     return response;
   } catch (error) {
@@ -569,6 +575,8 @@ exports.updateProductService = async ({
   altTexts,
   imageFileIds,
   publishAt,
+  authUserId,
+  isAdmin,
 }) => {
   const response = {
     code: 200,
@@ -588,6 +596,15 @@ exports.updateProductService = async ({
       return response;
     }
 
+    // Signing in used to be the only check, so any account could edit any ad.
+    if (!isAdmin && String(product.posterId) !== String(authUserId)) {
+      response.code = 403;
+      response.status = "failed";
+      response.message = "You can only edit your own ads";
+      return response;
+    }
+
+    const previousLink = product.link;
     product.name = name ? name : product.name;
     product.link = link ? link : product.link;
     product.age = age ? age : product.age;
@@ -613,8 +630,16 @@ exports.updateProductService = async ({
     }
 
     // Re-screen on edit, otherwise a clean ad could be edited into a violating
-    // one and stay published.
-    if (name !== undefined || description !== undefined || link !== undefined) {
+    // one and stay published. Only when the text actually changed: the edit
+    // form always resends title and description, and re-screening those
+    // unchanged would send an ad the admin already approved straight back to
+    // review over a phone number change. contentHash still holds the hash of
+    // the text as last reviewed, so comparing against it detects a change.
+    // The hash ignores markup, so injected markup is checked for separately.
+    const textChanged =
+      contentHash({ name: product.name, description: product.description }) !==
+        product.contentHash || product.link !== previousLink;
+    if (textChanged || hasUnsafeHtml(product.description)) {
       const review = await reviewAd(
         {
           name: product.name,
@@ -628,11 +653,19 @@ exports.updateProductService = async ({
       if (!review.isApproved) {
         product.isApproved = false;
         product.moderationReason = review.moderationReason;
+        response.message =
+          "Your ad was updated and sent for review before it goes live again. " +
+          describeReasons(review.reasons);
       }
     }
+    // Always, whether or not the text changed: markup is invisible to the hash.
+    product.description = sanitizeHtml(product.description);
 
     await product.save();
 
+    if (!product.isApproved && response.message === "Product updated successfully") {
+      response.message = "Your ad is waiting for an admin to review it.";
+    }
     response.data.product = product;
     return response;
   } catch (error) {
@@ -749,7 +782,7 @@ exports.deleteMany = async (req, res) => {
 };
 
 // delete Products
-exports.deleteProductService = async ({ id }) => {
+exports.deleteProductService = async ({ id, authUserId, isAdmin }) => {
   const response = {
     code: 200,
     status: "success",
@@ -765,6 +798,14 @@ exports.deleteProductService = async ({ id }) => {
       response.code = 404;
       response.status = "failed";
       response.message = "No Product data found";
+      return response;
+    }
+
+    // Admins delete from the pending queue; everyone else only their own ads.
+    if (!isAdmin && String(product.posterId) !== String(authUserId)) {
+      response.code = 403;
+      response.status = "failed";
+      response.message = "You can only delete your own ads";
       return response;
     }
 
@@ -1556,7 +1597,7 @@ exports.repostProductService = async ({ id, authUserId }) => {
         link: product.link,
         posterId: product.posterId,
       },
-      { skipDuplicateCheck: true }
+      { skipDuplicateCheck: true, skipQualityChecks: true }
     );
     if (!review.isApproved) {
       await Product.updateOne(

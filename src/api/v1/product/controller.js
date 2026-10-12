@@ -20,6 +20,8 @@ const {
   getRepostQuoteService,
 } = require("./service");
 
+const isAdminRole = (role) => role === "admin" || role === "superAdmin";
+
 // add Products
 exports.addProduct = async (req, res) => {
   const { status, code, message, data } = await addProductService({
@@ -63,6 +65,9 @@ exports.updateProduct = async (req, res) => {
   const { status, code, message, data } = await updateProductService({
     ...req.params,
     ...req.body,
+    // After the body spread, so a client cannot claim either of these.
+    authUserId: req.decoded?._id,
+    isAdmin: isAdminRole(req.decoded?.role),
   });
   if (data.product) {
     return res.status(code).json({ code, status, message, data });
@@ -91,6 +96,8 @@ exports.updateManyById = async (req, res) => {
 exports.deleteProduct = async (req, res) => {
   const { status, code, message, data } = await deleteProductService({
     ...req.params,
+    authUserId: req.decoded?._id,
+    isAdmin: isAdminRole(req.decoded?.role),
   });
   res.status(code).json({ code, status, message, data });
 };

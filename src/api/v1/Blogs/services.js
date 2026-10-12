@@ -186,7 +186,7 @@ exports.getBlogsServices = async ({ q, page, cat }) => {
   }
 };
 
-exports.getBlogsAdminServices = async ({ q, page, cat }) => {
+exports.getBlogsAdminServices = async ({ q, page, cat, size }) => {
   const response = {
     code: 200,
     status: "success",
@@ -199,7 +199,8 @@ exports.getBlogsAdminServices = async ({ q, page, cat }) => {
   const catregex = new RegExp(cat, "i");
   try {
     const pageNumber = page ? parseInt(page) : 1;
-    const limit = 6;
+    // Rows per page from the admin's page-size dropdown; 6 when not sent.
+    const limit = Math.min(100, Math.max(1, parseInt(size) || 6));
     const skipCount = (pageNumber - 1) * limit;
 
     // Admins see every post, including scheduled ones.
